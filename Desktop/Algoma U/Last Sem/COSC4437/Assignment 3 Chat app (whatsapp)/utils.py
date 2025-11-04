@@ -2,24 +2,17 @@
 import json
 import time
 
-# Pack a message into a JSON string before sending
+# --- Existing functions ---
 def pack_message(sender, message):
-    """
-    Creates a JSON-encoded message with timestamp.
-    """
     data = {
         "sender": sender,
         "timestamp": time.time(),
         "message": message
     }
-    return json.dumps(data).encode('utf-8')  # Convert to bytes for socket send()
+    return json.dumps(data).encode('utf-8')
 
 
-# Unpack a JSON message received from socket
 def unpack_message(data):
-    """
-    Decodes JSON-encoded message from bytes to dict.
-    """
     try:
         decoded = json.loads(data.decode('utf-8'))
         return decoded
@@ -27,9 +20,42 @@ def unpack_message(data):
         return {"error": "Invalid message format"}
 
 
-# Optional: Convert timestamp to readable format
 def format_time(timestamp):
-    """
-    Convert a timestamp (float) to human-readable HH:MM:SS.
-    """
     return time.strftime('%H:%M:%S', time.localtime(timestamp))
+
+
+# --- Add these functions ---
+
+def send_json(sock, msg_dict):
+    """
+    Send a Python dict as a JSON-encoded message over a socket.
+    Appends a newline for delimiting messages.
+    """
+    try:
+        json_str = json.dumps(msg_dict) + "\n"
+        sock.sendall(json_str.encode('utf-8'))
+    except Exception as e:
+        print(f"[send_json] Error sending message: {e}")
+
+
+def recv_json_from_file(sock_file):
+    """
+    Read a newline-delimited JSON message from a socket file (TextIOWrapper).
+    Returns a Python dict or None if EOF is reached.
+    """
+    try:
+        line = sock_file.readline()
+        if not line:
+            return None
+        return json.loads(line.strip())
+    except json.JSONDecodeError:
+        print("[recv_json_from_file] Invalid JSON received")
+        return None
+    except Exception as e:
+        print(f"[recv_json_from_file] Error reading message: {e}")
+        return None
+
+
+def now_ts():
+    """Return current timestamp as float (time.time())."""
+    return time.time()

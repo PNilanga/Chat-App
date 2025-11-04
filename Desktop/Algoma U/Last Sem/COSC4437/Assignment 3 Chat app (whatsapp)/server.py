@@ -1,15 +1,3 @@
-# server.py
-"""
-Threaded chat server with Cristian-style sync reply.
-Protocol: newline-delimited JSON messages (use utils.send_json / recv_json_from_file).
-Expected client message types:
- - {"type":"register", "name": "<username>"}        # first message to register a name
- - {"type":"msg", "sender":"<name>", "payload":"text", "ts_local": <float>}
- - {"type":"sync_request", "sender":"<name>", "t0": <float>}
-Server replies:
- - {"type":"sync_reply", "server_time": <float>}
- - For broadcast: forward the original msg dict (can be enriched)
-"""
 
 import socket
 import threading
