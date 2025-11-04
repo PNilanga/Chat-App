@@ -1,4 +1,3 @@
-
 import socket
 import threading
 import argparse
@@ -44,7 +43,21 @@ def handle_client(conn: socket.socket, addr):
         if msg.get('type') == 'register' and msg.get('name'):
             name = msg['name']
             with clients_lock:
+                # Check for duplicate username
+                is_duplicate = False
+                for _, existing_name in clients.values():
+                    if existing_name == name:
+                        is_duplicate = True
+                        break
+                
+                if is_duplicate:
+                    print(f"[!] {addr} tried to join with duplicate name: {name}")
+                    err_msg = {"type":"error", "payload": f"Username '{name}' is already taken.", "sender":"SERVER"}
+                    send_json(conn, err_msg)
+                    return # Close connection
+                
                 clients[conn] = (addr, name)
+                
             print(f"[+] Registered {name} @ {addr}")
             # Notify others user joined
             join_msg = {
@@ -55,11 +68,8 @@ def handle_client(conn: socket.socket, addr):
             }
             broadcast(join_msg, exclude_conn=conn)
         else:
-            # If the client didn't register, assign a fallback name
-            name = f"{addr[0]}:{addr[1]}"
-            with clients_lock:
-                clients[conn] = (addr, name)
-            print(f"[!] No register message; using fallback name {name}")
+            print(f"[!] {addr} did not send valid register message.")
+            return # Close connection if no registration
 
         # Main loop: handle incoming messages
         while True:
@@ -69,15 +79,50 @@ def handle_client(conn: socket.socket, addr):
                 break
 
             mtype = msg.get('type')
-            if mtype == 'msg':
-                # Optionally enrich with server receipt time
+            
+            # Add server receipt time to all user-generated messages
+            if mtype == 'msg' or mtype == 'private_msg':
                 msg['server_receive_time'] = now_ts()
+
+            if mtype == 'msg':
+                # Broadcast public message
                 print(f"[msg] {name}: {msg.get('payload')}")
                 broadcast(msg, exclude_conn=conn)
 
+            elif mtype == 'private_msg':
+                # Handle private message
+                target_name = msg.get('target')
+                print(f"[pm] {name} -> {target_name}: {msg.get('payload')}")
+                
+                target_conn = None
+                with clients_lock:
+                    # Find the target socket by iterating over the values (addr, name)
+                    for c_sock, (c_addr, c_name) in clients.items():
+                        if c_name == target_name:
+                            target_conn = c_sock
+                            break
+                
+                if target_conn:
+                    # Found target, send the message
+                    try:
+                        send_json(target_conn, msg)
+                    except Exception as e:
+                        print(f"[pm] Failed to send PM to {target_name}: {e}")
+                else:
+                    # Target not found, send error back to sender
+                    error_msg = {
+                        "type": "error",
+                        "payload": f"User '{target_name}' not found or is offline.",
+                        "sender": "SERVER",
+                        "server_time": now_ts()
+                    }
+                    try:
+                        send_json(conn, error_msg) # 'conn' is the sender's socket
+                    except Exception as e:
+                        print(f"[pm] Failed to send error reply to {name}: {e}")
+
             elif mtype == 'sync_request':
                 # Cristian algorithm: reply immediately with server time
-                # Client is expected to calculate offset.
                 reply = {
                     "type": "sync_reply",
                     "server_time": now_ts()
@@ -92,17 +137,17 @@ def handle_client(conn: socket.socket, addr):
                 print(f"[?] Unknown msg type from {name}: {mtype}")
 
     except Exception as e:
-        print(f"[!] Exception in handle_client for {addr}: {e}")
+        print(f"[!] Exception in handle_client for {name}@{addr}: {e}")
     finally:
         # Cleanup
-        try:
-            with clients_lock:
-                if conn in clients:
-                    _, departed_name = clients.pop(conn)
-                else:
-                    departed_name = name or str(addr)
-        except Exception:
-            departed_name = name or str(addr)
+        departed_name = name
+        with clients_lock:
+            if conn in clients:
+                # Get name from stored data in case 'name' is None
+                _, departed_name = clients.pop(conn)
+        
+        if departed_name is None:
+            departed_name = str(addr) # Fallback
 
         try:
             sock_file.close()
@@ -127,7 +172,12 @@ def handle_client(conn: socket.socket, addr):
 def run_server(host: str = HOST, port: int = PORT):
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind((host, port))
+    try:
+        srv.bind((host, port))
+    except Exception as e:
+        print(f"[!] Failed to bind to {host}:{port}: {e}")
+        return
+        
     srv.listen(MAX_BACKLOG)
     print(f"[i] Server listening on {host}:{port}")
 
@@ -152,7 +202,7 @@ def run_server(host: str = HOST, port: int = PORT):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Threaded chat server with Cristian sync reply.")
-    parser.add_argument('--host', default=HOST, help='Host to bind (default 0.0.0.0)')
-    parser.add_argument('--port', type=int, default=PORT, help='Port to bind (default 5000)')
+    parser.add_argument('--host', default=HOST, help=f'Host to bind (default: {HOST})')
+    parser.add_argument('--port', type=int, default=PORT, help=f'Port to bind (default: {PORT})')
     args = parser.parse_args()
     run_server(host=args.host, port=args.port)
